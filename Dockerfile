@@ -6,13 +6,7 @@ COPY requirements.txt .
 
 RUN pip install -r requirements.txt
 
-COPY tables.py .
-
-COPY airports.py .
-
-COPY /static .
-
-COPY main.py .
+COPY . .
 
 EXPOSE 8000
 
