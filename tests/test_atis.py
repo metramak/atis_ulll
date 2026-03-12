@@ -2,30 +2,32 @@
 Тесты для ATIS генератора.
 Запуск: pytest tests/ -v
 """
-import sys, pathlib
-from unittest.mock import MagicMock
+import sys
+import pathlib
 
-# Мокаем FastAPI чтобы импортировать main без сервера
-for mod in ['fastapi', 'fastapi.responses', 'fastapi.staticfiles',
-            'fastapi.middleware', 'fastapi.middleware.cors']:
-    sys.modules[mod] = MagicMock()
-sys.modules['fastapi'].Query = lambda *a, **kw: None
+# Корень проекта — чтобы находились airports.py и tables.py
+ROOT = pathlib.Path(__file__).parent.parent.resolve()
+sys.path.insert(0, str(ROOT))
 
-import importlib, types
+# FastAPI нужен только для запуска сервера, не для бизнес-логики.
+# Мокаем его чтобы тесты работали без установленного пакета.
+try:
+    import fastapi  # noqa: F401 — если установлен, используем как есть
+except ModuleNotFoundError:
+    from unittest.mock import MagicMock
+    for mod in ['fastapi', 'fastapi.responses', 'fastapi.staticfiles',
+                'fastapi.middleware', 'fastapi.middleware.cors']:
+        sys.modules[mod] = MagicMock()
+    sys.modules['fastapi'].Query = lambda *a, **kw: None
 
-def load_main():
-    src = pathlib.Path('main.py').read_text()
-    src = src.replace('pathlib.Path(__file__).parent', 'pathlib.Path(".")')
-    g = {'pathlib': pathlib}
-    exec(src, g)
-    return g
-
-m = load_main()
-parse_metar  = m['parse_metar']
-build_atis   = m['build_atis']
-auto_tl      = m['auto_transition_level']
-load_config  = m['load_config']
-save_config  = m['save_config']
+import main as _main
+from main import (
+    parse_metar,
+    build_atis,
+    auto_transition_level as auto_tl,
+    load_config,
+    save_config,
+)
 
 
 # ── METAR парсинг ────────────────────────────────────────────────────────────
@@ -110,16 +112,12 @@ def test_atis_contains_qnh():
 def test_atis_qfe_appended_after_qnh():
     r = _atis("ULAA 091000Z 20003MPS 9999 -SN OVC016 M12/M15 Q1019 NOSIG RMK QFE762/1017",
               icao="ULAA", arr="26", dep="26")
-    qnh_pos = r.index('QNH')
-    qfe_pos = r.index('QFE')
-    assert qfe_pos > qnh_pos
+    assert r.index('QFE') > r.index('QNH')
 
 def test_atis_qfe_before_acknowledge():
     r = _atis("ULAA 091000Z 20003MPS 9999 -SN OVC016 M12/M15 Q1019 NOSIG RMK QFE762/1017",
               icao="ULAA", arr="26", dep="26")
-    qfe_pos = r.index('QFE')
-    ack_pos = r.index('ACKNOWLEDGE')
-    assert qfe_pos < ack_pos
+    assert r.index('QFE') < r.index('ACKNOWLEDGE')
 
 def test_atis_z_suffix_text():
     r = _atis("ULLI 071000Z 28006MPS CAVOK 03/M01 Q1027 NOSIG", arr="28L")
@@ -131,7 +129,7 @@ def test_atis_no_z_suffix_other_rwy():
 
 def test_atis_voice_spells_digits():
     r = _atis("ULLI 071000Z 28006MPS CAVOK 03/M01 Q1027 NOSIG", voice=True)
-    assert 'ONE ZERO TWO SEVEN' in r  # QNH 1027
+    assert 'ONE ZERO TWO SEVEN' in r
 
 def test_atis_voice_zulu_suffix():
     r = _atis("ULLI 071000Z 28006MPS CAVOK 03/M01 Q1027 NOSIG", arr="28L", voice=True)
@@ -139,10 +137,9 @@ def test_atis_voice_zulu_suffix():
 
 def test_atis_acknowledge_last():
     r = _atis("ULLI 071000Z 28006MPS CAVOK 03/M01 Q1027 NOSIG")
-    assert 'ACKNOWLEDGE INFORMATION' in r  # text=A, voice=ALPHA
+    assert 'ACKNOWLEDGE INFORMATION' in r
 
 def test_atis_transition_level_auto():
-    # ULLI Q1027 → TL50
     r = _atis("ULLI 071000Z 28006MPS CAVOK 03/M01 Q1027 NOSIG")
     assert 'TRANSITION LEVEL 50' in r
 
@@ -160,7 +157,7 @@ def test_atis_ulaa():
 # ── Конфиг ───────────────────────────────────────────────────────────────────
 
 def test_config_isolation(tmp_path, monkeypatch):
-    monkeypatch.setitem(m, 'CONFIG_FILE', tmp_path / 'config.json')
+    monkeypatch.setattr(_main, 'CONFIG_FILE', tmp_path / 'config.json')
     save_config({'app': 'RNP', 'remarks': 'ULAA test'}, 'ULAA')
     save_config({'app': 'ILS', 'remarks': 'ULLI test'}, 'ULLI')
 
@@ -172,7 +169,7 @@ def test_config_isolation(tmp_path, monkeypatch):
     assert cfg_ulaa['remarks'] != cfg_ulli['remarks']
 
 def test_config_unknown_airport_defaults(tmp_path, monkeypatch):
-    monkeypatch.setitem(m, 'CONFIG_FILE', tmp_path / 'config.json')
+    monkeypatch.setattr(_main, 'CONFIG_FILE', tmp_path / 'config.json')
     cfg = load_config('XXXX')
     assert cfg['icao'] == 'XXXX'
     assert cfg['remarks'] == ''
